@@ -11,10 +11,10 @@ public class Config
     [Description("How many connections may wait at once. 0 means no limit.")]
     public int MaxSize { get; set; } = 20;
 
-    [Description("RemoteAdmin group names, highest priority first. A player whose group is not listed " + "waits behind everybody whose group is, and players of the same group are let in " + "in the order they arrived. These are the group keys from config_remoteadmin.txt.")]
+    [Description("RemoteAdmin group names, highest priority first. A player whose group is not listed waits behind everybody whose group is, and players of the same group are let in in the order they arrived. These are the group keys from config_remoteadmin.txt.")]
     public List<string> GroupPriority { get; set; } = ["owner", "admin", "moderator"];
 
-    [Description("Let anybody holding a reserved slot past the queue. Reserved slots are read from " + "UserIDReservedSlots.txt")]
+    [Description("Let anybody holding a reserved slot past the queue. Reserved slots are read from UserIDReservedSlots.txt")]
     public bool ReservedSlotSkip { get; set; } = true;
 
     [Description("Let verified Northwood staff past the queue.")]
@@ -23,7 +23,7 @@ public class Config
     [Description("Also read ranks and reserved slots from CedMod when it is installed.")]
     public bool CedModIntegration { get; set; } = true;
 
-    [Description("Shown every second to a waiting player. {position} is their place in the queue, " + "{total} is how many are waiting. Leave empty to show nothing.")]
+    [Description("Shown every second to a waiting player. {position} is their place in the queue, {total} is how many are waiting. Leave empty to show nothing.")]
     public string QueueHint { get; set; } = "<b>The server is full.</b>\nYou are <b>{position}.</b> in the queue ({total} waiting).";
 
     [Description("Shown to everybody still waiting when the plugin is disabled or the server shuts down.")]
