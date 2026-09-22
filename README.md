@@ -15,11 +15,8 @@ ranks.
   can be made not to take up a `max_players` slot at all.
 - Waiting players get a hint showing their position and how many people are ahead of them. The text is fully
   customizable.
-- Preauthentication records are kept alive while waiting. The game drops them after 200 seconds, which used to turn away
-  anybody who waited longer than that with a user id mismatch.
-- Authentication tokens are refreshed while waiting. Shortly before a waiting player's token runs out, their client is
-  asked for a new one, so a long queue no longer ends in a kick. If the refresh does not come through, the player is
-  told to reconnect instead of silently timing out.
+- Authentication tokens are refreshed while waiting. If the refresh does not come through, the player is
+  told to reconnect.
 - **Optional [CedMod](https://cedmod.nl/) integration** - when CedMod is installed, ranks and reserved slots are read
   from it as well. No extra setup is needed, and the plugin works exactly the same without it.
 
