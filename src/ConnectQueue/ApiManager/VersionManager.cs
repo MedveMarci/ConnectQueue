@@ -1,9 +1,9 @@
-﻿using System;
+using System;
 using System.Net;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace ConnectQueue.ApiFeatures;
+namespace ConnectQueue.ApiManager;
 
 internal static class VersionManager
 {

@@ -3,11 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using ConnectQueue.ApiFeatures;
+using ConnectQueue.ApiManager;
 
 namespace ConnectQueue.Ranks;
 
-internal static class CedModBridge
+internal static class CedMod
 {
     private const string AssemblyName = "CedMod";
     private const string QuerySystemTypeName = "CedMod.Addons.QuerySystem.QuerySystem";
@@ -114,11 +114,10 @@ internal static class CedModBridge
 
     private static bool Unsupported()
     {
-        if (!_announced)
-        {
-            _announced = true;
-            LogManager.Warn("CedMod is installed but this version's internals are not the ones this plugin knows. " + "Ranks will come from the game's own configuration only.");
-        }
+        if (_announced)
+            return false;
+        _announced = true;
+        LogManager.Warn("CedMod is installed but this version's internals are not the ones this plugin knows. " + "Ranks will come from the game's own configuration only.");
 
         return false;
     }

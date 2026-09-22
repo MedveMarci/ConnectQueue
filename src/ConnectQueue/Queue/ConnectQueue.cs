@@ -1,69 +1,44 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using CentralAuth;
-using ConnectQueue.ApiFeatures;
-using ConnectQueue.Internal;
-using ConnectQueue.Patches;
+using ConnectQueue.ApiManager;
 using ConnectQueue.Ranks;
 using Cryptography;
 using HarmonyLib;
 using Hints;
 using LabApi.Events.Arguments.PlayerEvents;
 using LabApi.Events.Handlers;
+using LiteNetLib;
 using MEC;
+using Mirror;
+using Mirror.LiteNetLib4Mirror;
 using NorthwoodLib;
 
-namespace ConnectQueue.Modules;
+namespace ConnectQueue.Queue;
 
-internal sealed class QueueEntry
-{
-    internal PlayerAuthenticationManager Auth { get; }
-
-    internal AuthenticationResponse Response { get; }
-
-    internal string UserId { get; }
-
-    internal DateTimeOffset TokenExpiry { get; }
-
-    internal int Priority { get; }
-
-    internal DateTime EnqueuedAt { get; }
-
-    internal ReferenceHub Hub => Auth == null ? null : Auth._hub;
-
-    internal bool Waiting =>
-        Auth != null && Hub != null && Auth.InstanceMode == ClientInstanceMode.Unverified;
-
-    internal bool TokenExpired => TokenExpiry != default && TokenExpiry < DateTimeOffset.UtcNow;
-
-    internal QueueEntry(PlayerAuthenticationManager auth, AuthenticationResponse response, string userId, DateTimeOffset tokenExpiry, int priority)
-    {
-        Auth = auth;
-        Response = response;
-        UserId = userId;
-        TokenExpiry = tokenExpiry;
-        Priority = priority;
-        EnqueuedAt = DateTime.UtcNow;
-    }
-
-    internal static bool Gone(PlayerAuthenticationManager auth)
-    {
-        return ReferenceEquals(auth, null);
-    }
-}
-
-internal sealed class ConnectQueueModule
+internal sealed class ConnectQueue
 {
     private const int NoPriority = int.MaxValue;
 
+    private const int ReservedPriority = -1;
+
     private static readonly TimeSpan ReleaseTimeout = TimeSpan.FromSeconds(10);
 
+    private static readonly TimeSpan RefreshTimeout = TimeSpan.FromSeconds(30);
+
+    private static readonly TimeSpan RefreshRetry = TimeSpan.FromSeconds(10);
+
+    private const int MaxRefreshAttempts = 3;
+
     private static int _online = -1;
-    
+
+    private static int _reservedOnline;
+
     private readonly List<QueueEntry> _entries = [];
 
     private readonly object _gate = new();
@@ -74,7 +49,7 @@ internal sealed class ConnectQueueModule
 
     private CoroutineHandle _loop;
 
-    internal static ConnectQueueModule Active { get; private set; }
+    internal static ConnectQueue Active { get; private set; }
 
     internal int Count
     {
@@ -87,7 +62,7 @@ internal sealed class ConnectQueueModule
         }
     }
 
-    internal ConnectQueueModule(Harmony harmony)
+    internal ConnectQueue(Harmony harmony)
     {
         _harmony = harmony;
     }
@@ -97,6 +72,7 @@ internal sealed class ConnectQueueModule
         Active = this;
 
         Volatile.Write(ref _online, -1);
+        Volatile.Write(ref _reservedOnline, 0);
 
         PlayerEvents.PreAuthenticating += OnPreAuthenticating;
         PlayerEvents.Left += OnPlayerLeft;
@@ -156,20 +132,51 @@ internal sealed class ConnectQueueModule
 
         AuthenticationToken token = ReadToken(response, out string userId);
 
-        if (settings.ReservedSlotSkip && RankSource.HasReservedSlot(userId)) return false;
+        lock (_gate)
+        {
+            int waiting = IndexOf(auth);
+            if (waiting >= 0)
+            {
+                _entries[waiting].TokenArrived(response, token?.ExpirationTime ?? default);
+                LogManager.Debug($"{Describe(userId)} sent a fresh authentication token while waiting.");
+                return true;
+            }
+        }
+
+        bool reserved = settings.ReservedSlotSkip && RankSource.HasReservedSlot(userId);
+
+        if (reserved)
+        {
+            bool room;
+
+            lock (_gate)
+            {
+                room = HasReservedRoom();
+            }
+
+            if (room) return false;
+
+            LogManager.Debug($"{Describe(userId)} holds a reserved slot, but the reserved slots are taken as well.");
+        }
 
         if (settings.AllowNorthwoodStaffSkip && IsNorthwoodStaff(auth, response, token)) return false;
+
+        IPEndPoint endpoint = EndpointOf(auth);
+        string preauthUserId = PreauthUserIdOf(endpoint);
+
+        if (preauthUserId == null)
+            LogManager.Warn($"Could not read the preauthentication record of {Describe(userId)}. They will be turned away if they wait for more than 200 seconds.");
 
         lock (_gate)
         {
             if (_entries.Count == 0 && HasFreeSlot()) return false;
             if (IndexOf(auth) >= 0) return true;
 
-            _entries.Add(new QueueEntry(auth, response, userId, token?.ExpirationTime ?? default, PriorityOf(userId, settings)));
+            _entries.Add(new QueueEntry(auth, response, userId, token?.ExpirationTime ?? default, reserved ? ReservedPriority : PriorityOf(userId, settings), endpoint, preauthUserId));
             Sort();
         }
 
-        LogManager.Debug($"{Describe(userId)} is waiting for a slot.");
+        LogManager.Debug($"{Describe(userId)} is waiting for a slot. {Lifetime(token)}");
 
         MainThread.RunNextTick(() => Advance());
         return true;
@@ -206,7 +213,14 @@ internal sealed class ConnectQueueModule
     {
         QueueEntry[] waiting = Advance();
 
-        string template = ConnectQueuePlugin.Settings?.QueueHint;
+        Config settings = ConnectQueuePlugin.Settings;
+        if (settings == null) return;
+
+        KeepPreauthAlive(waiting);
+
+        RefreshTokens(waiting);
+
+        string template = settings.QueueHint;
         if (string.IsNullOrWhiteSpace(template)) return;
 
         for (int position = 0; position < waiting.Length; position++)
@@ -235,7 +249,7 @@ internal sealed class ConnectQueueModule
             {
                 next = _entries[0];
                 _entries.RemoveAt(0);
-                _releasing[next.Auth] = DateTime.UtcNow;
+                _releasing[next.Auth] = DateTime.UtcNow + ReleaseTimeout;
             }
 
             waiting = [.. _entries];
@@ -278,6 +292,19 @@ internal sealed class ConnectQueueModule
             return;
         }
 
+        if (entry.RefreshPending)
+        {
+            TryAskForFreshToken(entry);
+
+            lock (_gate)
+            {
+                if (_releasing.ContainsKey(entry.Auth)) _releasing[entry.Auth] = DateTime.UtcNow + RefreshTimeout;
+            }
+
+            LogManager.Debug($"Holding a slot for {Describe(entry.UserId)} until their fresh authentication token arrives.");
+            return;
+        }
+
         if (entry.TokenExpired)
         {
             lock (_gate)
@@ -304,6 +331,66 @@ internal sealed class ConnectQueueModule
             }
 
             LogManager.Error($"Could not let {Describe(entry.UserId)} in: {error}");
+        }
+    }
+
+    private static void KeepPreauthAlive(QueueEntry[] waiting)
+    {
+        foreach (QueueEntry entry in waiting)
+        {
+            if (entry.Endpoint == null || entry.PreauthUserId == null) continue;
+
+            CustomLiteNetLib4MirrorTransport.UserIds[entry.Endpoint] = new PreauthItem(entry.PreauthUserId);
+        }
+    }
+
+    private static IPEndPoint EndpointOf(PlayerAuthenticationManager auth)
+    {
+        try
+        {
+            NetworkConnectionToClient connection = auth.connectionToClient;
+            if (connection == null) return null;
+
+            return LiteNetLib4MirrorServer.Peers.TryGetValue(connection.connectionId, out NetPeer peer) ? peer?.EndPoint : null;
+        }
+        catch (Exception error)
+        {
+            LogManager.Debug($"Could not read the endpoint of a connection: {error.Message}");
+            return null;
+        }
+    }
+
+    private static string PreauthUserIdOf(IPEndPoint endpoint)
+    {
+        if (endpoint == null) return null;
+
+        return CustomLiteNetLib4MirrorTransport.UserIds.TryGetValue(endpoint, out PreauthItem preauth) ? preauth.UserId : null;
+    }
+
+    private static void RefreshTokens(QueueEntry[] waiting)
+    {
+        foreach (QueueEntry entry in waiting)
+            if (entry.NeedsRefresh(TimeSpan.FromSeconds(60)))
+                TryAskForFreshToken(entry);
+    }
+
+    private static void TryAskForFreshToken(QueueEntry entry)
+    {
+        if (entry.RefreshAttempts >= MaxRefreshAttempts) return;
+        if (entry.RefreshPending && DateTime.UtcNow - entry.RefreshAskedAt < RefreshRetry) return;
+        if (!entry.Waiting) return;
+
+        try
+        {
+            entry.Auth._timeoutTimer = 0f;
+            entry.Auth.RequestAuthentication();
+            entry.RefreshAsked();
+
+            LogManager.Debug($"Asked {Describe(entry.UserId)} for a fresh authentication token ({entry.RefreshAttempts}/{MaxRefreshAttempts}).");
+        }
+        catch (Exception error)
+        {
+            LogManager.Error($"Could not ask {Describe(entry.UserId)} for a fresh authentication token: {error}");
         }
     }
 
@@ -344,13 +431,39 @@ internal sealed class ConnectQueueModule
 
         if (online < 0) return false;
 
-        return online + _releasing.Count < CustomNetworkManager.slots;
+        // _reservedOnline stays at zero unless reserved slot holders are told not to take up a
+        // normal slot, so this is the game's own rule in the default configuration.
+        return online - Volatile.Read(ref _reservedOnline) + _releasing.Count < CustomNetworkManager.slots;
+    }
+
+    private bool HasReservedRoom()
+    {
+        int online = Volatile.Read(ref _online);
+
+        if (online < 0) return false;
+
+        return online + _releasing.Count < CustomNetworkManager.slots + CustomNetworkManager.reservedSlots;
     }
 
     private static void Recount()
     {
         if (!MainThread.IsMainThread) return;
+
         Volatile.Write(ref _online, ReferenceHub.GetPlayerCount(ClientInstanceMode.ReadyClient));
+        Volatile.Write(ref _reservedOnline, ConnectQueuePlugin.Settings?.ReservedSlotsFree == true ? CountReservedOnline() : 0);
+    }
+
+    private static int CountReservedOnline()
+    {
+        int reserved = 0;
+
+        foreach (ReferenceHub hub in ReferenceHub.AllHubs)
+        {
+            if (hub == null || hub.Mode != ClientInstanceMode.ReadyClient) continue;
+            if (RankSource.HasReservedSlot(hub.authManager?.UserId)) reserved++;
+        }
+
+        return reserved;
     }
 
     private static int PriorityOf(string userId, Config settings)
@@ -399,13 +512,24 @@ internal sealed class ConnectQueueModule
 
         try
         {
-            return response.SignedAuthToken.TryGetToken("Authentication", out AuthenticationToken token, out _, out userId) ? token : null;
+            bool read = response.SignedAuthToken.TryGetToken("Authentication", out AuthenticationToken token, out _, out userId);
+
+            userId = RemoveSalt(userId);
+            return read ? token : null;
         }
         catch (Exception error)
         {
             LogManager.Debug($"Could not read an authentication token: {error.Message}");
             return null;
         }
+    }
+
+    private static string RemoveSalt(string userId)
+    {
+        if (string.IsNullOrEmpty(userId)) return userId;
+
+        int salt = userId.IndexOf('$');
+        return salt < 0 ? userId : userId.Substring(0, salt);
     }
 
     private int IndexOf(PlayerAuthenticationManager auth)
@@ -432,8 +556,8 @@ internal sealed class ConnectQueueModule
 
         if (_releasing.Count == 0) return;
 
-        DateTime cutoff = DateTime.UtcNow - ReleaseTimeout;
-        PlayerAuthenticationManager[] stale = [.. _releasing.Where(pending => pending.Key == null || pending.Key._hub == null || pending.Value < cutoff).Select(pending => pending.Key)];
+        DateTime now = DateTime.UtcNow;
+        PlayerAuthenticationManager[] stale = [.. _releasing.Where(pending => pending.Key == null || pending.Key._hub == null || pending.Value < now).Select(pending => pending.Key)];
 
         foreach (PlayerAuthenticationManager auth in stale) _releasing.Remove(auth);
     }
@@ -441,6 +565,16 @@ internal sealed class ConnectQueueModule
     private static string Describe(string userId)
     {
         return string.IsNullOrEmpty(userId) ? "An unknown player" : userId;
+    }
+
+    private static string Lifetime(AuthenticationToken token)
+    {
+        if (token == null) return "Their authentication token could not be read.";
+
+        double left = (token.ExpirationTime - DateTimeOffset.UtcNow).TotalSeconds;
+        double total = (token.ExpirationTime - token.IssuanceTime).TotalSeconds;
+
+        return $"Their authentication token has {left:F0}s left of the {total:F0}s it was issued for.";
     }
 
     private sealed class ByReference : IEqualityComparer<PlayerAuthenticationManager>

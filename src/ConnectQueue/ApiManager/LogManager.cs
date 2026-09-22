@@ -1,7 +1,7 @@
-﻿using System;
+using System;
 using LabApi.Features.Console;
 
-namespace ConnectQueue.ApiFeatures;
+namespace ConnectQueue.ApiManager;
 
 internal static class LogManager
 {

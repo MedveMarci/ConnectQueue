@@ -14,8 +14,11 @@ public class Config
     [Description("RemoteAdmin group names, highest priority first. A player whose group is not listed waits behind everybody whose group is, and players of the same group are let in in the order they arrived. These are the group keys from config_remoteadmin.txt.")]
     public List<string> GroupPriority { get; set; } = ["owner", "admin", "moderator"];
 
-    [Description("Let anybody holding a reserved slot past the queue. Reserved slots are read from UserIDReservedSlots.txt")]
+    [Description("Let anybody holding a reserved slot past the queue. Reserved slots are read from UserIDReservedSlots.txt. They are only let past while the server is below max_players plus reserved_slots, which is what the game itself allows.")]
     public bool ReservedSlotSkip { get; set; } = true;
+
+    [Description("Do not count players holding a reserved slot against max_players. With this on the queue keeps letting others in until max_players players without a reserved slot are on the server, so the server may go above max_players. Off is the game's own behaviour, where a reserved slot only helps somebody get in once the server is already full.")]
+    public bool ReservedSlotsFree { get; set; } = false;
 
     [Description("Let verified Northwood staff past the queue.")]
     public bool AllowNorthwoodStaffSkip { get; set; } = true;

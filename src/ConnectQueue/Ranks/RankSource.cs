@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using ConnectQueue.ApiFeatures;
+using ConnectQueue.ApiManager;
 
 namespace ConnectQueue.Ranks;
 
@@ -23,7 +23,7 @@ internal static class RankSource
             LogManager.Debug($"Could not read the RemoteAdmin members list: {error.Message}");
         }
 
-        return CedModEnabled ? CedModBridge.GroupOf(userId) : null;
+        return CedModEnabled ? CedMod.GroupOf(userId) : null;
     }
 
     internal static bool HasReservedSlot(string userId)
@@ -39,6 +39,6 @@ internal static class RankSource
             LogManager.Debug($"Could not read the reserved slots list: {error.Message}");
         }
 
-        return CedModEnabled && CedModBridge.HasReservedSlot(userId);
+        return CedModEnabled && CedMod.HasReservedSlot(userId);
     }
 }

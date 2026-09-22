@@ -38,9 +38,9 @@
         <Reference Include="Mirror" HintPath="$(sl_references)\Mirror.dll"/>
         <Reference Include="UnityEngine.CoreModule" HintPath="$(sl_references)\UnityEngine.CoreModule.dll"/>
     </ItemGroup>
-    
+
     <ItemGroup>
-        <Content Include="..\README.md" Link="README.md"/>
+        <Content Include="..\..\README.md" Link="README.md"/>
     </ItemGroup>
 
     <Target Name="PostBuild" AfterTargets="PostBuildEvent">

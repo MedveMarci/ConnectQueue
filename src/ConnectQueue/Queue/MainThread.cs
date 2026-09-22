@@ -2,9 +2,9 @@ using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading;
-using ConnectQueue.ApiFeatures;
+using ConnectQueue.ApiManager;
 
-namespace ConnectQueue.Internal;
+namespace ConnectQueue.Queue;
 
 internal static class MainThread
 {

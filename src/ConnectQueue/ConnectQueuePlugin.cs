@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using ConnectQueue.ApiFeatures;
-using ConnectQueue.Internal;
-using ConnectQueue.Modules;
+using ConnectQueue.ApiManager;
+using ConnectQueue.Queue;
 using HarmonyLib;
 using LabApi.Events.Handlers;
 using LabApi.Features;
@@ -16,7 +15,7 @@ public class ConnectQueuePlugin : Plugin<Config>
 {
     private Harmony _harmony;
     private CoroutineHandle _pump;
-    private ConnectQueueModule _queue;
+    private Queue.ConnectQueue _queue;
 
     internal static ConnectQueuePlugin Singleton { get; set; }
 
@@ -29,7 +28,7 @@ public class ConnectQueuePlugin : Plugin<Config>
     public override string Description =>
         "Holds connections in a queue when the server is full, ordered by the ranks the server already knows.";
 
-    public override Version Version { get; } = new(1, 0, 0);
+    public override Version Version { get; } = new(1, 1, 0);
 
     public override Version RequiredApiVersion => new(LabApiProperties.CompiledVersion);
 
@@ -41,7 +40,7 @@ public class ConnectQueuePlugin : Plugin<Config>
         MainThread.Capture();
 
         _harmony = new Harmony($"hu.funzone.connectqueue.{ServerStatic.ServerPort}");
-        _queue = new ConnectQueueModule(_harmony);
+        _queue = new Queue.ConnectQueue(_harmony);
         _queue.Start();
 
         _pump = Timing.RunCoroutine(PumpLoop(), Segment.RealtimeUpdate);
