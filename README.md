@@ -42,8 +42,6 @@ ranks.
 | `reserved_slots_free`        | `false`                                          | Do not count reserved slot holders against `max_players`, so the server may go above it. Off is the game's own behaviour.  |
 | `allow_northwood_staff_skip` | `true`                                           | Let verified Northwood staff past the queue.                                                                               |
 | `ced_mod_integration`        | `true`                                           | Also read ranks and reserved slots from CedMod when it is installed.                                                       |
-| `token_refresh`              | `true`                                           | Ask a waiting player's client for a fresh authentication token before the old one expires. Turn off if clients get kicked. |
-| `token_refresh_margin`       | `60`                                             | How many seconds before the token expires the refresh is asked for.                                                        |
 | `queue_hint`                 | `<b>The server is full.</b>...`                  | Shown every second to a waiting player. Supports `{position}` and `{total}`. Leave empty to show nothing.                  |
 | `queue_stopped_message`      | `The queue has stopped. Please reconnect.`       | Shown to everybody still waiting when the plugin is disabled or the server shuts down.                                     |
 | `token_expired_message`      | `Your authentication expired while waiting. ...` | Shown to a player whose session token ran out while they waited.                                                           |
